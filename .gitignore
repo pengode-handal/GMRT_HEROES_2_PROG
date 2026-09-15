@@ -1,0 +1,39 @@
+# PlatformIO
+.pio/
+.piolibdeps/
+.clangd/
+.pioenvs/
+libdeps/
+
+# Build artifacts
+*.elf
+*.bin
+*.hex
+*.map
+*.eep
+*.lst
+
+# VS Code
+.vscode/
+!.vscode/extensions.json
+!.vscode/settings.json
+
+# OS generated files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Temporary files
+*.tmp
+*.temp
+*.log
+*.bak
+*.swp
+*.swo
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Backup files
+*~
