@@ -1,0 +1,346 @@
+from pathlib import Path
+import time
+
+import cv2 as cv
+import numpy as np
+
+from pose_filter import EmaPoseFilter
+from udp_sender import PoseUdpSender
+
+
+# Config
+
+DROIDCAM_URL = "0"
+
+# 45 mm = 4,5 cm = 0,045 meter.
+MARKER_SIZE_M = 0.045
+AXIS_LENGTH_M = 0.0225
+
+CALIBRATION_WIDTH = 640
+CALIBRATION_HEIGHT = 480
+
+CALIBRATION_FILE = (
+    Path(__file__).resolve().parent
+    / "calibration"
+    / "camera_calibration.yml"
+)
+
+
+# Aruco detector
+
+TARGET_MARKER_ID = 1
+
+# UDP
+ROBOT_IP = "192.168.107.69"
+ROBOT_PORT = 4210
+
+# Periode
+UDP_SEND_HZ = 20
+UDP_SEND_INTERVAL = 1.0 / UDP_SEND_HZ
+
+# pose filter
+FILTER_ALPHA = 0.35
+
+
+MARKER_ROLES = {
+    0: "Standby",
+    1: "Target Autonomous",
+    2: "Marker 2",
+    3: "Marker 3",
+    4: "Marker 4",
+}
+
+
+def load_calibration():
+    if not CALIBRATION_FILE.exists():
+        raise FileNotFoundError(
+            f"{CALIBRATION_FILE} belum ada. "
+            "Run calibrate_camera.py dulu."
+        )
+
+    file = cv.FileStorage(
+        str(CALIBRATION_FILE),
+        cv.FILE_STORAGE_READ,
+    )
+
+    camera_matrix = file.getNode("camera_matrix").mat()
+    dist_coeffs = file.getNode("dist_coeffs").mat()
+    file.release()
+
+    if camera_matrix is None or dist_coeffs is None:
+        raise ValueError("Kalibrasi tidak lengkap.")
+
+    return camera_matrix, dist_coeffs
+
+
+def create_object_points():
+
+    half = MARKER_SIZE_M / 2
+
+    return np.array(
+        [
+            [-half, half, 0],
+            [half, half, 0],
+            [half, -half, 0],
+            [-half, -half, 0],
+        ],
+        dtype=np.float32,
+    )
+
+
+def prepare_frame(frame):
+
+    height, width = frame.shape[:2]
+
+    if (width, height) == (
+        CALIBRATION_WIDTH,
+        CALIBRATION_HEIGHT,
+    ):
+        return frame
+
+    camera_ratio = width / height
+    calibration_ratio = (
+        CALIBRATION_WIDTH / CALIBRATION_HEIGHT
+    )
+
+    if abs(camera_ratio - calibration_ratio) > 0.02:
+        raise RuntimeError(
+            f"Droidcam resolution {width}x{height}, "
+            f"tidak sesuai "
+            f"{CALIBRATION_WIDTH}x{CALIBRATION_HEIGHT}. "
+            "Atur DroidCam ke rasio 4:3 atau lakukan "
+        )
+
+    return cv.resize(
+        frame,
+        (CALIBRATION_WIDTH, CALIBRATION_HEIGHT),
+    )
+
+
+def main():
+    camera_matrix, dist_coeffs = load_calibration()
+    object_points = create_object_points()
+
+    dictionary = cv.aruco.getPredefinedDictionary(
+        cv.aruco.DICT_4X4_50
+    )
+
+    parameters = cv.aruco.DetectorParameters()
+    parameters.cornerRefinementMethod = (
+        cv.aruco.CORNER_REFINE_SUBPIX
+    )
+
+    detector = cv.aruco.ArucoDetector(
+        dictionary,
+        parameters,
+    )
+
+    pose_filter = EmaPoseFilter(alpha=FILTER_ALPHA)
+
+    udp_sender = PoseUdpSender(
+        ROBOT_IP,
+        ROBOT_PORT,
+    )
+
+    camera = cv.VideoCapture(0)
+
+    last_udp_send = 0.0
+    last_console_print = 0.0
+    last_packet = ""
+
+    try:
+        if not camera.isOpened():
+            raise RuntimeError(
+                f"Droidcam fail: {DROIDCAM_URL}"
+            )
+
+        print("Droidcam success.")
+        print(f"marker id: {TARGET_MARKER_ID}")
+        print(
+            f"UDP dikirim ke {ROBOT_IP}:{ROBOT_PORT}"
+        )
+        print("Tekan q untuk keluar.")
+
+        while True:
+            success, frame = camera.read()
+
+            if not success:
+                print("Frame DroidCam gagal dibaca.")
+                break
+
+            frame = prepare_frame(frame)
+            gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
+
+            corners, ids, _ = detector.detectMarkers(gray)
+
+# Init pose filter
+            target_pose = None
+
+            if ids is not None:
+                cv.aruco.drawDetectedMarkers(
+                    frame,
+                    corners,
+                    ids,
+                )
+
+                for i, marker_id in enumerate(ids.flatten()):
+                    marker_id = int(marker_id)
+                    role = MARKER_ROLES.get(
+                        marker_id,
+                        "???",
+                    )
+
+                    image_points = (
+                        corners[i]
+                        .reshape(4, 2)
+                        .astype(np.float32)
+                    )
+
+                    found, rvec, tvec = cv.solvePnP(
+                        object_points,
+                        image_points,
+                        camera_matrix,
+                        dist_coeffs,
+                        flags=cv.SOLVEPNP_IPPE_SQUARE,
+                    )
+
+                    if not found:
+                        continue
+
+                    cv.drawFrameAxes(
+                        frame,
+                        camera_matrix,
+                        dist_coeffs,
+                        rvec,
+                        tvec,
+                        AXIS_LENGTH_M,
+                        2,
+                    )
+
+                    tx, ty, tz = [
+                        float(value)
+                        for value in tvec.reshape(3)
+                    ]
+
+                    distance_cm = (
+                        float(np.linalg.norm(tvec)) * 100
+                    )
+
+                    rotation_matrix, _ = cv.Rodrigues(rvec)
+                    roll, pitch, yaw = cv.RQDecomp3x3(
+                        rotation_matrix
+                    )[0]
+
+                    x, y = image_points[0].astype(int)
+                    x = max(x, 10)
+                    y = max(y - 55, 25)
+
+                    texts = [
+                        f"ID {marker_id} - {role}",
+                        f"tx={tx * 100:.1f} cm, "
+                        f"tz={tz * 100:.1f} cm",
+                        f"Jarak total={distance_cm:.1f} cm",
+                        f"R/P/Y={roll:.1f}/"
+                        f"{pitch:.1f}/{yaw:.1f} deg",
+                    ]
+
+                    for line, text in enumerate(texts):
+                        cv.putText(
+                            frame,
+                            text,
+                            (x, y + line * 21),
+                            cv.FONT_HERSHEY_SIMPLEX,
+                            0.50,
+                            (0, 255, 0),
+                            2,
+                            cv.LINE_AA,
+                        )
+
+                    if (
+                        marker_id == TARGET_MARKER_ID
+                        and tz > 0
+                    ):
+                        filtered_tx, filtered_tz = (
+                            pose_filter.update(tx, tz)
+                        )
+
+                        target_pose = (
+                            marker_id,
+                            filtered_tx,
+                            filtered_tz,
+                        )
+
+                        cv.putText(
+                            frame,
+                            (
+                                "FILTER: "
+                                f"tx={filtered_tx * 100:.1f} cm "
+                                f"tz={filtered_tz * 100:.1f} cm"
+                            ),
+                            (10, 30),
+                            cv.FONT_HERSHEY_SIMPLEX,
+                            0.65,
+                            (0, 255, 255),
+                            2,
+                            cv.LINE_AA,
+                        )
+
+            now = time.monotonic()
+
+            # Interval limit
+            if now - last_udp_send >= UDP_SEND_INTERVAL:
+                if target_pose is not None:
+                    marker_id, filtered_tx, filtered_tz = (
+                        target_pose
+                    )
+
+                    last_packet = udp_sender.send_pose(
+                        marker_id,
+                        filtered_tx,
+                        filtered_tz,
+                    )
+                else:
+                    # Marker hilang: jangan gunakan data lama.
+                    pose_filter.reset()
+                    last_packet = (
+                        udp_sender.send_no_marker()
+                    )
+
+                last_udp_send = now
+
+            if now - last_console_print >= 1.0:
+                print(f"UDP: {last_packet}")
+                last_console_print = now
+
+            cv.putText(
+                frame,
+                f"UDP: {last_packet}",
+                (10, CALIBRATION_HEIGHT - 15),
+                cv.FONT_HERSHEY_SIMPLEX,
+                0.50,
+                (255, 255, 0),
+                1,
+                cv.LINE_AA,
+            )
+
+            cv.imshow(
+                "DroidCam ArUco + Filter + UDP",
+                frame,
+            )
+
+            if cv.waitKey(1) & 0xFF == ord("q"):
+                break
+
+    finally:
+        try:
+            udp_sender.send_no_marker()
+        except OSError:
+            pass
+
+        udp_sender.close()
+        camera.release()
+        cv.destroyAllWindows()
+
+
+if __name__ == "__main__":
+    main()
