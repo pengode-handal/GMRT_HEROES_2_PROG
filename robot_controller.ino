@@ -5,9 +5,11 @@
 // PIN MOTOR
 // ==============================
 
+// Motor kiri
 #define MOTOR_LEFT_IN1   5
 #define MOTOR_LEFT_IN2   4
 
+// Motor kanan
 #define MOTOR_RIGHT_IN1  2
 #define MOTOR_RIGHT_IN2  15
 
@@ -22,10 +24,20 @@
 // ==============================
 
 #define MOTOR_MAX_PWM 255
-#define MOTOR_DEADZONE 20
 
-// Kalau salah satu motor berputar terbalik,
-// ubah menjadi true.
+// Kecepatan perubahan PWM
+// Semakin besar = semakin responsif
+#define PWM_ACCEL_STEP 18
+
+// Perlambatan saat joystick dilepas
+// Semakin besar = semakin cepat berhenti
+#define PWM_BRAKE_STEP 30
+
+// ==============================
+// ARAH MOTOR
+// ==============================
+
+// Ubah menjadi true jika arah motor terbalik
 bool LEFT_MOTOR_REVERSE = false;
 bool RIGHT_MOTOR_REVERSE = false;
 
@@ -33,15 +45,15 @@ bool RIGHT_MOTOR_REVERSE = false;
 // KONFIGURASI GRIPPER
 // ==============================
 
-#define GRIPPER_OPEN_ANGLE  
-#define GRIPPER_CLOSE_ANGLE  120
-#define GRIPPER_INITIAL_ANGLE 90
+const int GRIPPER_OPEN_ANGLE = 30;
+const int GRIPPER_CLOSE_ANGLE = 120;
+const int GRIPPER_INITIAL_ANGLE = 90;
 
 // ==============================
-// KONFIGURASI CONTROLLER
+// KONFIGURASI JOYSTICK
 // ==============================
 
-#define STICK_DEADZONE 30
+#define STICK_DEADZONE 35
 
 // ==============================
 // OBJECT
@@ -51,11 +63,16 @@ Servo gripper;
 
 ControllerPtr myControllers[BP32_MAX_GAMEPADS];
 
+// PWM motor yang sedang diberikan
+int currentLeftPWM = 0;
+int currentRightPWM = 0;
+
 // ==============================
 // MOTOR
 // ==============================
 
 void setupMotorPins() {
+
     pinMode(MOTOR_LEFT_IN1, OUTPUT);
     pinMode(MOTOR_LEFT_IN2, OUTPUT);
 
@@ -65,57 +82,86 @@ void setupMotorPins() {
     stopMotors();
 }
 
+// ==============================
+// MOTOR KIRI
+// ==============================
+
 void setLeftMotor(int pwm) {
+
     if (LEFT_MOTOR_REVERSE) {
         pwm = -pwm;
     }
 
-    pwm = constrain(pwm, -255, 255);
+    pwm = constrain(pwm, -MOTOR_MAX_PWM, MOTOR_MAX_PWM);
 
     if (pwm > 0) {
+
         analogWrite(MOTOR_LEFT_IN1, pwm);
         digitalWrite(MOTOR_LEFT_IN2, LOW);
-    }
-    else if (pwm < 0) {
+
+    } else if (pwm < 0) {
+
         digitalWrite(MOTOR_LEFT_IN1, LOW);
-        analogWrite(MOTOR_LEFT_IN2, abs(pwm));
-    }
-    else {
+        analogWrite(MOTOR_LEFT_IN2, -pwm);
+
+    } else {
+
         digitalWrite(MOTOR_LEFT_IN1, LOW);
         digitalWrite(MOTOR_LEFT_IN2, LOW);
     }
 }
 
+// ==============================
+// MOTOR KANAN
+// ==============================
+
 void setRightMotor(int pwm) {
+
     if (RIGHT_MOTOR_REVERSE) {
         pwm = -pwm;
     }
 
-    pwm = constrain(pwm, -255, 255);
+    pwm = constrain(pwm, -MOTOR_MAX_PWM, MOTOR_MAX_PWM);
 
     if (pwm > 0) {
+
         analogWrite(MOTOR_RIGHT_IN1, pwm);
         digitalWrite(MOTOR_RIGHT_IN2, LOW);
-    }
-    else if (pwm < 0) {
+
+    } else if (pwm < 0) {
+
         digitalWrite(MOTOR_RIGHT_IN1, LOW);
-        analogWrite(MOTOR_RIGHT_IN2, abs(pwm));
-    }
-    else {
+        analogWrite(MOTOR_RIGHT_IN2, -pwm);
+
+    } else {
+
         digitalWrite(MOTOR_RIGHT_IN1, LOW);
         digitalWrite(MOTOR_RIGHT_IN2, LOW);
     }
 }
 
+// ==============================
+// SET MOTOR
+// ==============================
+
 void setMotor(int leftPWM, int rightPWM) {
-    leftPWM = constrain(leftPWM, -255, 255);
-    rightPWM = constrain(rightPWM, -255, 255);
+
+    leftPWM = constrain(leftPWM, -MOTOR_MAX_PWM, MOTOR_MAX_PWM);
+    rightPWM = constrain(rightPWM, -MOTOR_MAX_PWM, MOTOR_MAX_PWM);
 
     setLeftMotor(leftPWM);
     setRightMotor(rightPWM);
 }
 
+// ==============================
+// STOP MOTOR
+// ==============================
+
 void stopMotors() {
+
+    currentLeftPWM = 0;
+    currentRightPWM = 0;
+
     digitalWrite(MOTOR_LEFT_IN1, LOW);
     digitalWrite(MOTOR_LEFT_IN2, LOW);
 
@@ -124,27 +170,141 @@ void stopMotors() {
 }
 
 // ==============================
+// SMOOTH PWM
+// ==============================
+
+int movePWM(int currentPWM, int targetPWM) {
+
+    // Kalau target lebih besar dari current,
+    // PWM dinaikkan secara bertahap.
+
+    if (targetPWM > currentPWM) {
+
+        currentPWM += PWM_ACCEL_STEP;
+
+        if (currentPWM > targetPWM) {
+            currentPWM = targetPWM;
+        }
+    }
+
+    // Kalau target lebih kecil dari current,
+    // PWM diturunkan secara bertahap.
+
+    else if (targetPWM < currentPWM) {
+
+        currentPWM -= PWM_BRAKE_STEP;
+
+        if (currentPWM < targetPWM) {
+            currentPWM = targetPWM;
+        }
+    }
+
+    return currentPWM;
+}
+
+// ==============================
+// UPDATE MOTOR
+// ==============================
+
+void updateMotorPWM(int targetLeftPWM, int targetRightPWM) {
+
+    targetLeftPWM = constrain(
+        targetLeftPWM,
+        -MOTOR_MAX_PWM,
+        MOTOR_MAX_PWM
+    );
+
+    targetRightPWM = constrain(
+        targetRightPWM,
+        -MOTOR_MAX_PWM,
+        MOTOR_MAX_PWM
+    );
+
+    // ==========================
+    // CEGAH LANGSUNG BALIK ARAH
+    // ==========================
+
+    // Motor kiri
+    if (
+        currentLeftPWM != 0 &&
+        targetLeftPWM != 0 &&
+        ((currentLeftPWM > 0 && targetLeftPWM < 0) ||
+         (currentLeftPWM < 0 && targetLeftPWM > 0))
+    ) {
+
+        targetLeftPWM = 0;
+    }
+
+    // Motor kanan
+    if (
+        currentRightPWM != 0 &&
+        targetRightPWM != 0 &&
+        ((currentRightPWM > 0 && targetRightPWM < 0) ||
+         (currentRightPWM < 0 && targetRightPWM > 0))
+    ) {
+
+        targetRightPWM = 0;
+    }
+
+    // ==========================
+    // RAMP PWM
+    // ==========================
+
+    currentLeftPWM = movePWM(
+        currentLeftPWM,
+        targetLeftPWM
+    );
+
+    currentRightPWM = movePWM(
+        currentRightPWM,
+        targetRightPWM
+    );
+
+    // ==========================
+    // KIRIM PWM
+    // ==========================
+
+    setMotor(
+        currentLeftPWM,
+        currentRightPWM
+    );
+}
+
+// ==============================
 // GRIPPER
 // ==============================
 
 void setupGripper() {
-    gripper.attach(GRIPPER_SERVO_PIN);
+
+    gripper.setPeriodHertz(50);
+
+    gripper.attach(
+        GRIPPER_SERVO_PIN,
+        500,
+        2400
+    );
 
     gripper.write(GRIPPER_INITIAL_ANGLE);
 
     Serial.println("Gripper initialized.");
 }
 
-void openGripper() {
-    gripper.write(GRIPPER_OPEN_ANGLE);
+// ==============================
+// BUKA GRIPPER
+// ==============================
 
-    Serial.println("Gripper: OPEN");
+void openGripper() {
+
+    gripper.write(GRIPPER_OPEN_ANGLE);
 }
 
-void closeGripper() {
-    gripper.write(GRIPPER_CLOSE_ANGLE);
+// ==============================
+// TUTUP GRIPPER
+// ==============================
 
-    Serial.println("Gripper: CLOSE");
+void closeGripper() {
+
+    gripper.write(GRIPPER_CLOSE_ANGLE);
 }
 
 // ==============================
@@ -152,6 +312,7 @@ void closeGripper() {
 // ==============================
 
 int applyDeadzone(int value) {
+
     if (abs(value) < STICK_DEADZONE) {
         return 0;
     }
@@ -164,8 +325,6 @@ int applyDeadzone(int value) {
 // ==============================
 
 void onConnectedController(ControllerPtr ctl) {
-
-    bool foundEmptySlot = false;
 
     for (int i = 0; i < BP32_MAX_GAMEPADS; i++) {
 
@@ -184,15 +343,11 @@ void onConnectedController(ControllerPtr ctl) {
             Serial.print("Model: ");
             Serial.println(ctl->getModelName());
 
-            foundEmptySlot = true;
-
-            break;
+            return;
         }
     }
 
-    if (!foundEmptySlot) {
-        Serial.println("No empty controller slot.");
-    }
+    Serial.println("No empty controller slot.");
 }
 
 // ==============================
@@ -207,12 +362,12 @@ void onDisconnectedController(ControllerPtr ctl) {
 
             myControllers[i] = nullptr;
 
+            stopMotors();
+
             Serial.println();
             Serial.println("==============================");
             Serial.println("PS4 CONTROLLER DISCONNECTED");
             Serial.println("==============================");
-
-            stopMotors();
 
             return;
         }
@@ -220,7 +375,7 @@ void onDisconnectedController(ControllerPtr ctl) {
 }
 
 // ==============================
-// PROCESS CONTROLLER
+// PROCESS GAMEPAD
 // ==============================
 
 void processGamepad(ControllerPtr gamepad) {
@@ -229,41 +384,33 @@ void processGamepad(ControllerPtr gamepad) {
         return;
     }
 
-    if (!gamepad->hasData()) {
-        return;
-    }
-
     // ==========================
     // EMERGENCY STOP
     // ==========================
 
-    // Cross pada PS4 = a() pada Bluepad32
     if (gamepad->a()) {
-        stopMotors();
 
-        Serial.println("EMERGENCY STOP");
+        stopMotors();
 
         return;
     }
 
     // ==========================
-    // LEFT STICK
+    // LEFT JOYSTICK
     // ==========================
 
     int x = gamepad->axisX();
     int y = gamepad->axisY();
 
+    // Deadzone
     x = applyDeadzone(x);
     y = applyDeadzone(y);
 
-    // Bluepad32:
-    // stick maju biasanya menghasilkan nilai negatif
-    // sehingga dibalik agar maju = positif.
-
+    // Joystick atas = maju
     y = -y;
 
     // ==========================
-    // NORMALISASI
+    // BATASI NILAI
     // ==========================
 
     x = constrain(x, -511, 511);
@@ -273,22 +420,49 @@ void processGamepad(ControllerPtr gamepad) {
     // DIFFERENTIAL DRIVE
     // ==========================
 
-    int leftPWM = y + x;
-    int rightPWM = y - x;
+    int leftValue = y + x;
+    int rightValue = y - x;
 
-    leftPWM = constrain(leftPWM, -511, 511);
-    rightPWM = constrain(rightPWM, -511, 511);
+    leftValue = constrain(
+        leftValue,
+        -511,
+        511
+    );
 
-    // Ubah range -511..511 menjadi -255..255
-
-    leftPWM = map(leftPWM, -511, 511, -255, 255);
-    rightPWM = map(rightPWM, -511, 511, -255, 255);
+    rightValue = constrain(
+        rightValue,
+        -511,
+        511
+    );
 
     // ==========================
-    // MOTOR
+    // KONVERSI KE PWM
     // ==========================
 
-    setMotor(leftPWM, rightPWM);
+    int leftPWM = map(
+        leftValue,
+        -511,
+        511,
+        -MOTOR_MAX_PWM,
+        MOTOR_MAX_PWM
+    );
+
+    int rightPWM = map(
+        rightValue,
+        -511,
+        511,
+        -MOTOR_MAX_PWM,
+        MOTOR_MAX_PWM
+    );
+
+    // ==========================
+    // UPDATE MOTOR
+    // ==========================
+
+    updateMotorPWM(
+        leftPWM,
+        rightPWM
+    );
 
     // ==========================
     // GRIPPER
@@ -304,7 +478,7 @@ void processGamepad(ControllerPtr gamepad) {
 }
 
 // ==============================
-// PROCESS ALL CONTROLLERS
+// PROCESS CONTROLLERS
 // ==============================
 
 void processControllers() {
@@ -321,13 +495,11 @@ void processControllers() {
             continue;
         }
 
-        if (!ctl->hasData()) {
+        if (!ctl->isGamepad()) {
             continue;
         }
 
-        if (ctl->isGamepad()) {
-            processGamepad(ctl);
-        }
+        processGamepad(ctl);
     }
 }
 
@@ -339,7 +511,7 @@ void setup() {
 
     Serial.begin(115200);
 
-    delay(1000);
+    delay(500);
 
     Serial.println();
     Serial.println("==============================");
@@ -350,13 +522,11 @@ void setup() {
 
     setupGripper();
 
-    // Bluepad32 setup
     BP32.setup(
         &onConnectedController,
         &onDisconnectedController
     );
 
-    // Kita tidak menggunakan virtual controller
     BP32.enableVirtualDevice(false);
 
     Serial.println("Bluepad32 initialized.");
@@ -369,11 +539,9 @@ void setup() {
 
 void loop() {
 
-    bool dataUpdated = BP32.update();
+    BP32.update();
 
-    if (dataUpdated) {
-        processControllers();
-    }
+    processControllers();
 
-    delay(20);
+    delay(5);
 }
