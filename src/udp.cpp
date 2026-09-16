@@ -1,4 +1,5 @@
 #include <WiFiUdp.h>
+#include <ESPmDNS.h>
 #include <sstream>
 #include <vector>
 #include <string>
@@ -13,7 +14,13 @@ WiFiUDP getUDP() {
     return udp;
 }
 
-int setupUDP() {\
+int setupUDP() {
+    if (MDNS.begin("espheroes2")) {
+      // Advertise custom UDP service to local network
+      MDNS.addService("custom_udp", "udp", localPort);
+      Serial.println("MDNS Ready!");
+    }
+
     // Begin listening on local UDP port
     udp.begin(localPort);
 
