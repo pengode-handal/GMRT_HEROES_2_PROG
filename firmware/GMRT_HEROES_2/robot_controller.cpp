@@ -61,12 +61,12 @@ void RobotController::update() {
         updateAutonomous(nowMs);
     }
 
-    int buttonOutput = digitalRead(Pins::BUTTON_PIN);
+    /*int buttonOutput = digitalRead(Pins::BUTTON_PIN);
     if (buttonOutput == 0 && _mode != RobotMode::MANUAL) {
         setMode(RobotMode::MANUAL, nowMs);
     } else if (buttonOutput == 1 && _mode != RobotMode::AUTONOMOUS) {
         setMode(RobotMode::AUTONOMOUS, nowMs);
-    }
+    }*/
 
     printStatus(nowMs);
 }
@@ -84,12 +84,12 @@ void RobotController::handleButtons(uint32_t nowMs) {
         Serial.println("Emergency stop cleared.");
     }
 
-    /*if (_gamepad.trianglePressed()) {
+    if (_gamepad.trianglePressed()) {
         RobotMode nextMode = _mode == RobotMode::MANUAL
             ? RobotMode::AUTONOMOUS
             : RobotMode::MANUAL;
         setMode(nextMode, nowMs);
-    }*/
+    }
 }
 
 void RobotController::setMode(RobotMode nextMode, uint32_t nowMs) {

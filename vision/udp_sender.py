@@ -45,7 +45,7 @@ class PoseUdpSender:
         return self.sequence
 
     def send_pose(self, marker_id: int, tx: float, tz: float) -> str:
-        message = encode_pose(self._next_sequence(), marker_id, tx, tz)
+        message = encode_pose(self._next_sequence(), marker_id, -(tx+0.05), tz)
         self._send(message)
         return message.strip()
 
