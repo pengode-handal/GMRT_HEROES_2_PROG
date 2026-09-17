@@ -1,0 +1,5 @@
+#pragma once
+
+#define ROBOT_WIFI_SSID "YOUR_2_4_GHZ_WIFI"
+#define ROBOT_WIFI_PASSWORD "YOUR_WIFI_PASSWORD"
+

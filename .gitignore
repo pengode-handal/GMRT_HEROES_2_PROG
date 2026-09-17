@@ -1,0 +1,6 @@
+firmware/GMRT_HEROES_2/secrets.h
+vision/.venv/
+__pycache__/
+*.py[cod]
+.vscode/
+.idea/
